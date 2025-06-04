@@ -83,8 +83,8 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, padding_side="left", **tokenizer_kwargs)
         self.cfg = AutoConfig.from_pretrained(model_name_or_path, **kwargs)
-        self.max_length = max_length or self.cfg.max_position_embeddings
-        self.model_max_length = self.cfg.max_position_embeddings
+        self.max_length = max_length or self.cfg.max_position_embeddings  # 传入max_length时，取传入值；否则取模型最大输入长度
+        self.model_max_length = self.cfg.max_position_embeddings  # 模型最大输入长度
         self.estimated_max = estimated_max
 
         self.prepare_predefined_inputs()
@@ -111,16 +111,17 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
             + len(self.task_prompt_inputs)
             + len(self.chat_template_suffix_inputs)
             + len(self.sep_inputs)
-        )
+        )  # 计算固定token的长度
 
         # Ensure that the template will not cause the input to exceed the model max length
+        # max_length与固定token的长度之和超过模型最大输入长度时，将max_length缩减到恰当值
         if self.max_length + self.predefined_length > self.model_max_length:
             self.max_length = self.model_max_length - self.predefined_length
 
         self.max_length_padding = ensure_multiple_of_8(
             max(self.model_max_length, self.max_length + self.predefined_length),
             max_value=self.model_max_length,
-        )
+        )  # 确保填充的最大长度为8的整数倍
 
     def concat_input_ids(self, input_ids: List[int]) -> List[int]:
         """Concatenate input IDs with prompt templates."""
@@ -132,7 +133,7 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
             + self.chat_template_suffix_inputs
         )
 
-    def prepare_inputs(self, queries: List[str], documents: List[str], *, instruction: Optional[str] = None) -> dict:
+    def prepare_inputs(self, queries: List[str], documents: List[str], *, instruction: Optional[str] = None) -> dict:  # 对查询列表和文档列表两两配对并进行分词编码
         """Prepare model inputs from query-document pairs.
 
         Args:
@@ -144,11 +145,11 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
             dict: Tokenized and padded inputs
         """
         inputs = []
-        instruction_prompt = self.instruction_prompt.format(instruction=instruction) if instruction else None
+        instruction_prompt = self.instruction_prompt.format(instruction=instruction) if instruction else None  # 依据入参设置说明提示词
 
-        for query, document in zip(queries, documents):
-            query_prompt = self.query_prompt.format(query=query)
-            if instruction_prompt:
+        for query, document in zip(queries, documents):  # 两两配对进行分词编码
+            query_prompt = self.query_prompt.format(query=query)  # 构造查询提示词
+            if instruction_prompt:  # 说明提示词非空时，以换行符将其与查询提示词前后拼接
                 query_prompt = "".join([instruction_prompt, self.sep, query_prompt])
 
             # Tokenize query with length limit
@@ -158,10 +159,10 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
                 add_special_tokens=False,
                 max_length=self.max_length * 3 // 4,  # Reserve more space for document
                 truncation=True,
-            )
+            )  # 对查询提示词进行分词编码
 
             available_tokens = self.model_max_length - len(query_inputs["input_ids"]) - self.predefined_length
-            doc_maxlen = min(available_tokens, self.max_length)
+            doc_maxlen = min(available_tokens, self.max_length)  # 基于长度限制进行最大长度确认
 
             # Tokenize document
             document_inputs = self.tokenizer(
@@ -170,7 +171,7 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
                 add_special_tokens=False,
                 max_length=doc_maxlen,  # Avoid exceeding the model maximum length
                 truncation=True,
-            )
+            )  # 对文档提示词进行分词编码
 
             # Combine query and document
             item = self.tokenizer.prepare_for_model(
@@ -182,9 +183,10 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
                 return_attention_mask=False,
                 return_token_type_ids=False,
                 add_special_tokens=False,
-            )
+            )  # 将查询提示词、换行符、文档提示词的分词编码结果进行整合
 
             # Add prompt templates
+            # 构造当前查询-文档对的分词编码并收集
             item["input_ids"] = self.concat_input_ids(item["input_ids"])
             item["attention_mask"] = [1] * len(item["input_ids"])
             inputs.append(item)
@@ -196,11 +198,11 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
             max_length=self.max_length_padding,
             pad_to_multiple_of=8,  # For efficient tensor operations
             return_tensors="pt",
-        )
+        )  # 填充以使得所有输入的分词编码在同一长度
 
     def forward(
         self,
-        input_ids: torch.Tensor,
+        input_ids: torch.Tensor,  # 输入编码
         attention_mask: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
     ) -> RerankerOutput:
@@ -217,11 +219,19 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-        )
+        )  # 模型推理
 
         # Use logits for classification
-        yes_logits = outputs.logits[:, -1, self.yes_loc]
-        no_logits = outputs.logits[:, -1, self.no_loc]
+        # 计算相似度评分，outputs.logits是未经过归一化的预测值，`outputs.logits`的形状通常为`[batch_size, sequence_length, vocab_size]`，即每个token位置上对应词表大小的logits。
+        yes_logits = outputs.logits[:, -1, self.yes_loc]  # 这里只关注序列最后一个token（`[:, -1, :]`）在特定位置`self.yes_loc`的logits，也即`yes_logits`：获取每个样本中最后一个token对应“是”的logit值。
+        no_logits = outputs.logits[:, -1, self.no_loc]  # 这里只关注序列最后一个token（`[:, -1, :]`）在特定位置`self.no_loc`的logits，也即`no_logits`：获取每个样本中最后一个token对应“否”的logit值。
+        """
+        - 计算每个样本的“是”logit减去“否”logit的差值。这个差值可以理解为模型对“是”的倾向程度：
+
+        - 如果差值为正，表示模型更倾向于“是”；
+
+        - 如果差值为负，表示模型更倾向于“否”。
+        """
         logits = yes_logits - no_logits
 
         loss = None
@@ -229,6 +239,7 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
             loss = self.loss_fct(logits.view(-1), labels.float().view(-1))
 
         # Get binary predictions
+        # 首先对模型预测值进行sigmoid函数处理，将其映射到(0,1)区间，然后基于是否大于0.5做出二分类判断
         predictions = (torch.sigmoid(logits) > 0.5).long()
 
         return RerankerOutput(loss=loss, logits=logits, predictions=predictions)
@@ -243,9 +254,10 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
         normalize: bool = False,
     ) -> torch.Tensor:
         """Get model predictions for query-document pairs."""
+        # 查询列表和文档列表一一对应配对，然后分词编码【将查询和文档分别置入相应提示词中，然后分别分词编码，接着进行合并填充】
         inputs = self.prepare_inputs(queries=queries, documents=documents, instruction=instruction)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
+        # 将查询-文档对的分词编码作为输入，推理得到相似度评分
         scores = self.forward(**inputs).logits.cpu().float()
         if normalize:
             scores = self.normalize_scores(scores)

@@ -62,7 +62,7 @@ class BaseReranker:
             list[RankResult]: Reranked results.
         """
         return self._rank(
-            queries=[query] * len(documents),
+            queries=[query] * len(documents),  # 对查询基于文档列表长度进行等量扩充，以便后续配对编码
             documents=documents,
             top_k=top_k,
             batch_size=batch_size,
@@ -103,13 +103,13 @@ class BaseReranker:
             ValueError: If the number of queries and documents are not equal.
 
         """
-        if len(queries) != len(documents):
+        if len(queries) != len(documents):  # 查询列表与文档列表的等长断言【见rank方法调用_rank时对查询的扩充处理】
             msg = "The number of queries and documents must be the same."
             raise ValueError(msg)
 
         scores = self._compute_scores(
             queries=queries, documents=documents, batch_size=batch_size, show_progress=show_progress, **kwargs
-        )
+        )  # 计算相似度评分
         top_k_scores, top_k_indices = top_k_numpy(scores=scores, k=top_k, sort=sort)
 
         return [
@@ -139,12 +139,12 @@ class BaseReranker:
             np.ndarray: Computed scores.
 
         """
-        if len(queries) < batch_size:
+        if len(queries) < batch_size:  # 查询列表在单批次数量之内时，直接使用模型推理
             return np.array(self.predict(queries, documents, **kwargs))
 
-        scores = np.zeros(len(queries), dtype=np.float32)
+        scores = np.zeros(len(queries), dtype=np.float32)  # 初始化相似度评分结果
         for docs, org_indices in tqdm(
-            bucket_batch_iter(documents, batch_size),
+            bucket_batch_iter(documents, batch_size),  # 通过生成器的方式构造一个迭代器，每次返回批量数据和其对应数据的原始索引
             desc="Ranking",
             disable=not show_progress,
             total=(len(queries) + batch_size - 1) // batch_size,

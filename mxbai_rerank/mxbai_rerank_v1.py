@@ -40,7 +40,7 @@ class MxbaiRerankV1(BaseReranker, TorchModule):
 
     def predict(self, queries: list[str], documents: list[str]) -> torch.Tensor:
         features = self.tokenizer.batch_encode_plus(
-            batch_text_or_text_pairs=list(zip(queries, documents)),
+            batch_text_or_text_pairs=list(zip(queries, documents)),  # zip用法，从前往后，两两配对，以少者为准【多者舍弃】
             padding=True,
             truncation=True,
             max_length=self.max_length,
