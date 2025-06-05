@@ -82,6 +82,7 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
             },
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, padding_side="left", **tokenizer_kwargs)
+        self.tokenizer.deprecation_warnings["Asking-to-pad-a-fast-tokenizer"] = True  # 消除分词器fast警告
         self.cfg = AutoConfig.from_pretrained(model_name_or_path, **kwargs)
         self.max_length = max_length or self.cfg.max_position_embeddings  # 传入max_length时，取传入值；否则取模型最大输入长度
         self.model_max_length = self.cfg.max_position_embeddings  # 模型最大输入长度
@@ -217,9 +218,9 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
             RerankerOutput containing loss, logits and predictions
         """
         outputs = self.model(
-            input_ids=input_ids,
+            input_ids=input_ids,  # 维度：batch_size, sequence_length
             attention_mask=attention_mask,
-        )  # 模型推理
+        )  # 模型推理，输出outputs.logits维度：batch_size, sequence_length, vocab_size
 
         # Use logits for classification
         # 计算相似度评分，outputs.logits是未经过归一化的预测值，`outputs.logits`的形状通常为`[batch_size, sequence_length, vocab_size]`，即每个token位置上对应词表大小的logits。
@@ -256,7 +257,7 @@ class MxbaiRerankV2(BaseReranker, TorchModule):
         """Get model predictions for query-document pairs."""
         # 查询列表和文档列表一一对应配对，然后分词编码【将查询和文档分别置入相应提示词中，然后分别分词编码，接着进行合并填充】
         inputs = self.prepare_inputs(queries=queries, documents=documents, instruction=instruction)
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}  # 注意这里的inputs维度：batch_size*单个序列的分词编码长度
         # 将查询-文档对的分词编码作为输入，推理得到相似度评分
         scores = self.forward(**inputs).logits.cpu().float()
         if normalize:

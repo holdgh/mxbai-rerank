@@ -16,6 +16,9 @@ class RankResult:
     score: float
     document: str | None
 
+    def __str__(self):
+        return f"原始索引为：{self.index}，相似度得分为：{self.score}，文档内容为：{self.document}"
+
 
 class BaseReranker:
     """Base class for reranker models."""
